@@ -71,20 +71,32 @@ export OPENPI=$(pwd)
 ```
 
 ### Step 3 — pi0.5 PyTorch checkpoint (for the steering server)
-The steered server uses a PyTorch copy of `pi05_droid_jointpos` at
-`~/.cache/openpi/pi05_droid_jointpos_pytorch`. Convert it once (the JAX source
-auto-downloads from GCS):
+The steered server needs a **PyTorch** copy of `pi05_droid_jointpos` at
+`~/.cache/openpi/pi05_droid_jointpos_pytorch` (`config.json` + `model.safetensors`
++ `assets/droid/norm_stats.json`). You don't back this up — you **reconvert** it:
 ```bash
 cd $OPENPI
+# (3a) download the JAX checkpoint locally: start the server once and Ctrl-C after it
+#      prints "listening". Downloads to ~/.cache/openpi/openpi-assets-simeval/...
+.venv/bin/python scripts/serve_policy.py --port 8999 policy:checkpoint \
+  --policy.config=pi05_droid_jointpos \
+  --policy.dir=gs://openpi-assets-simeval/pi05_droid_jointpos      # Ctrl-C once "listening"
+
+# (3b) convert JAX -> PyTorch (tyro CLI). checkpoint_dir = the .../params subdir; the
+#      script auto-copies the sibling assets/ (norm stats); pi05 is detected from the path.
 .venv/bin/python examples/convert_jax_model_to_pytorch.py \
   --config_name pi05_droid_jointpos \
-  --checkpoint_dir gs://openpi-assets-simeval/pi05_droid_jointpos \
-  --output_dir ~/.cache/openpi/pi05_droid_jointpos_pytorch
-# (also copy norm stats/assets into the output dir if the script doesn't:
-#  assets/droid/norm_stats.json — see VLS_SESSION_SUMMARY.md)
+  --checkpoint_dir ~/.cache/openpi/openpi-assets-simeval/pi05_droid_jointpos/params \
+  --output_path   ~/.cache/openpi/pi05_droid_jointpos_pytorch
+
+# (3c) safety net: ensure norm stats are in place (no-op if convert already copied them)
+cp -rn ~/.cache/openpi/openpi-assets-simeval/pi05_droid_jointpos/assets \
+       ~/.cache/openpi/pi05_droid_jointpos_pytorch/ 2>/dev/null || true
+# verify -> should show config.json, model.safetensors, assets/droid/norm_stats.json
+find ~/.cache/openpi/pi05_droid_jointpos_pytorch -maxdepth 3 -type f
 ```
-The pi0 / pi0.5 **JAX** checkpoints used by `serve_policy.py` auto-download from
-`gs://openpi-assets-simeval/...` on first launch (no manual step).
+The pi0 / pi0.5 **JAX** checkpoints used by `serve_policy.py` (incl. the OFF=pi0 side)
+auto-download from `gs://openpi-assets-simeval/...` on first launch — no manual step.
 
 ### Step 4 — overlay these custom files into RoboLab
 ```bash
