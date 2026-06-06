@@ -30,23 +30,78 @@ assets/scenes/
 VLS_SESSION_SUMMARY.md   # full design notes + results
 ```
 
-## Prerequisites (on the machine that runs it)
-- **RoboLab** checkout with its `.venv` (Isaac Lab / Isaac Sim 5.0, Blackwell → cu128 torch).
-- **OpenPI** checkout with its `.venv` (`/root/ishneet/openpi`), used by the steering server.
-- Converted **pi0.5 PyTorch checkpoint** at `~/.cache/openpi/pi05_droid_jointpos_pytorch`
-  (from OpenPI `examples/convert_jax_model_to_pytorch.py` on `pi05_droid_jointpos`).
-- pi0 / pi0.5 JAX checkpoints auto-download from `gs://openpi-assets-simeval/...` on first serve.
-- `GOOGLE_API_KEY` in the environment only if you use the Gemini guidance fallback.
+## Reproducible setup FROM SCRATCH (clean machine)
 
-## Install (overlay onto a RoboLab checkout)
-Copy these files into your RoboLab tree at the same paths, e.g.:
+This repo is an **overlay** — it holds only our custom files. To run, you also need
+RoboLab, OpenPI, Isaac Sim/Lab, and the pi0.5 checkpoint. Everything below is pinned
+to the exact versions this was built and tested against.
+
+### Versions (what this was built on)
+| Component | Pin |
+|---|---|
+| RoboLab | `github.com/NVLabs/RoboLab` @ `7d45d74904eade3b578a8eb1f2f9f89bc3d40326` (branch main) |
+| OpenPI (fork) | `github.com/xuningy/openpi.git` @ `aa6420561529593114160d05e5ad155792b272f3` |
+| Vision-Language-Steering | `github.com/Vision-Language-Steering/code.git` @ `b6e87edc217a2a7682caadba285677fc79eb6f81` (optional; only the Gemini guidance template) |
+| Python | 3.11.13 |
+| torch (RoboLab venv) | 2.7.0+cu128 · (OpenPI venv) 2.11.0+cu128 — **CUDA 12.8** |
+| Isaac Sim / Isaac Lab | 5.0 / 2.2.0 (installed automatically by RoboLab's `uv sync`) |
+
+### Hardware / system prereqs
+- NVIDIA GPU with **CUDA 12.8** drivers. (Built on Blackwell sm_120 → needs cu128 torch; the
+  pins above already use cu128.) ~24 GB free VRAM is comfortable for one steered demo.
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) and system `ffmpeg`.
+- ~30 GB disk (Isaac Sim + checkpoints).
+
+### Step 1 — RoboLab (this installs Isaac Sim 5.0 + Isaac Lab 2.2.0 automatically)
 ```bash
-cp -r policies/molmoact            $ROBOLAB/policies/
-cp    policies/pi0_family/run_interactive.py $ROBOLAB/policies/pi0_family/
+cd ~ && git clone https://github.com/NVLabs/RoboLab && cd RoboLab
+git checkout 7d45d74904eade3b578a8eb1f2f9f89bc3d40326
+uv sync                 # creates .venv with Isaac Sim/Lab; accepts EULA headlessly
+export ROBOLAB=$(pwd)
+```
+
+### Step 2 — OpenPI (policy serving + JAX→PyTorch conversion)
+```bash
+cd ~ && git clone https://github.com/xuningy/openpi.git && cd openpi
+git checkout aa6420561529593114160d05e5ad155792b272f3
+uv sync                 # creates openpi/.venv
+# Blackwell only: ensure cu128 torch in this venv
+.venv/bin/pip install --index-url https://download.pytorch.org/whl/cu128 torch
+export OPENPI=$(pwd)
+```
+
+### Step 3 — pi0.5 PyTorch checkpoint (for the steering server)
+The steered server uses a PyTorch copy of `pi05_droid_jointpos` at
+`~/.cache/openpi/pi05_droid_jointpos_pytorch`. Convert it once (the JAX source
+auto-downloads from GCS):
+```bash
+cd $OPENPI
+.venv/bin/python examples/convert_jax_model_to_pytorch.py \
+  --config_name pi05_droid_jointpos \
+  --checkpoint_dir gs://openpi-assets-simeval/pi05_droid_jointpos \
+  --output_dir ~/.cache/openpi/pi05_droid_jointpos_pytorch
+# (also copy norm stats/assets into the output dir if the script doesn't:
+#  assets/droid/norm_stats.json — see VLS_SESSION_SUMMARY.md)
+```
+The pi0 / pi0.5 **JAX** checkpoints used by `serve_policy.py` auto-download from
+`gs://openpi-assets-simeval/...` on first launch (no manual step).
+
+### Step 4 — overlay these custom files into RoboLab
+```bash
+cd <this-repo>
+cp -r policies/molmoact                       $ROBOLAB/policies/
+cp    policies/pi0_family/run_interactive.py  $ROBOLAB/policies/pi0_family/
 cp    robolab/tasks/benchmark/colored_blocks_demo.py $ROBOLAB/robolab/tasks/benchmark/
-cp    assets/scenes/colored_blocks.usda      $ROBOLAB/assets/scenes/
+cp    assets/scenes/colored_blocks.usda       $ROBOLAB/assets/scenes/
 cp    assets/scenes/_images/colored_blocks.png $ROBOLAB/assets/scenes/_images/
 ```
+
+### Step 5 — (optional) Gemini guidance fallback
+Only needed if a prompt can't be parsed by the hand-written `guidance_manual.py`
+(the demo scene never needs it). Set `GOOGLE_API_KEY` in the env and optionally
+clone the VLS template repo (pin above) to `VLS_TEMPLATE_DIR`.
+
+Then jump to **Launch** below.
 
 ## Launch (the runbook)
 GPU layout we used: **5** = steering server, **6** = demo, **7** = pi0 server.
@@ -55,13 +110,13 @@ GPU layout we used: **5** = steering server, **6** = demo, **7** = pi0 server.
 ```bash
 cd $ROBOLAB
 GOOGLE_API_KEY=$GOOGLE_API_KEY CUDA_VISIBLE_DEVICES=5 TORCHDYNAMO_DISABLE=1 \
-  /root/ishneet/openpi/.venv/bin/python policies/molmoact/pi05_steer_server.py \
+  $OPENPI/.venv/bin/python policies/molmoact/pi05_steer_server.py \
   --port 5556 --steer --num-steps 5
 ```
 
 2) **pi0 server** (for the OFF side of the toggle; OpenPI venv):
 ```bash
-cd /root/ishneet/openpi
+cd $OPENPI
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 CUDA_VISIBLE_DEVICES=7 .venv/bin/python scripts/serve_policy.py \
   --port 8001 policy:checkpoint --policy.config=pi0_droid_jointpos \
   --policy.dir=gs://openpi-assets-simeval/pi0_droid_jointpos
