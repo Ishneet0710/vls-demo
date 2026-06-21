@@ -2,3 +2,9 @@
 __pycache__/
 *.env
 .env
+
+# vendored openpi: keep source, ignore its build artifacts
+openpi/.venv/
+**/__pycache__/
+*.pyc
+openpi/.git/

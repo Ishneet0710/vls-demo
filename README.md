@@ -61,14 +61,16 @@ export ROBOLAB=$(pwd)
 ```
 
 ### Step 2 — OpenPI (policy serving + JAX→PyTorch conversion)
+The pinned OpenPI fork is **vendored in this repo under `openpi/`** (source only, no
+venv) so you don't depend on the upstream fork staying alive. Just build its venv:
 ```bash
-cd ~ && git clone https://github.com/xuningy/openpi.git && cd openpi
-git checkout aa6420561529593114160d05e5ad155792b272f3
-uv sync                 # creates openpi/.venv
+cd openpi            # the openpi/ folder in THIS repo
+uv sync              # creates openpi/.venv from the vendored source
 # Blackwell only: ensure cu128 torch in this venv
 .venv/bin/pip install --index-url https://download.pytorch.org/whl/cu128 torch
 export OPENPI=$(pwd)
 ```
+(Upstream, for reference, was `github.com/xuningy/openpi.git` @ `aa64205...`.)
 
 ### Step 3 — pi0.5 PyTorch checkpoint (for the steering server)
 The steered server needs a **PyTorch** copy of `pi05_droid_jointpos` at
